@@ -1,8 +1,8 @@
 {
   "id": "codexUsage",
   "name": "Codex Usage",
-  "description": "Latest locally recorded Codex limits and reset countdowns",
-  "version": "1.0.0",
+  "description": "Codex quota rings, local token activity and model usage",
+  "version": "1.1.0",
   "author": "mir4zul",
   "icon": "terminal",
   "type": "widget",

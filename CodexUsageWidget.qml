@@ -20,8 +20,6 @@ PluginComponent {
     // Settings
     property int refreshInterval: 30000
     property bool showIcon: pluginData.showIcon !== false       // default on
-    property bool useAccentColor: pluginData.useAccentColor === true  // default off (brand blue)
-    readonly property color brandColor: "#10A37F"               // Antigravity blue
 
     // Account/session state
     property bool loggedIn: false
@@ -30,6 +28,14 @@ PluginComponent {
     property string plan: ""
     property string cliVersion: ""
     property string updatedAt: ""
+    property var stats: ({})
+    property real maxDaily: Math.max.apply(null, [1].concat((stats.daily || []).map(function(d) { return d.tokens; })))
+    function compact(value) {
+        if (value >= 1000000000) return (value / 1000000000).toFixed(1) + "B";
+        if (value >= 1000000) return (value / 1000000).toFixed(1) + "M";
+        if (value >= 1000) return (value / 1000).toFixed(1) + "K";
+        return String(Math.round(value));
+    }
 
     // Quota buckets: id -> { GROUP, GROUP_DESC, LABEL, WINDOW, REMAINING, RESET, DESC }
     property var buckets: ({})
@@ -89,7 +95,7 @@ PluginComponent {
     }
 
     popoutWidth: 380
-    popoutHeight: 520
+    popoutHeight: 760
 
     // --- Helpers ---
 
@@ -151,6 +157,9 @@ PluginComponent {
         }
 
         switch (key) {
+        case "STATS":
+            try { stats = JSON.parse(val); } catch (e) { stats = ({}); }
+            break;
         case "LOGGED_IN":
             loggedIn = (val === "true");
             break;
@@ -258,7 +267,7 @@ PluginComponent {
                 layer.enabled: true
                 layer.effect: MultiEffect {
                     colorization: 1.0
-                    colorizationColor: root.useAccentColor ? Theme.primary : root.brandColor
+                    colorizationColor: Theme.primary
                 }
             }
 
@@ -314,165 +323,223 @@ PluginComponent {
         }
     }
 
-    // --- Popout ---
+    component UsageRing: Item {
+        property real percent: 0
+        property color accent: Theme.primary
+        width: 76
+        height: 76
+        Canvas {
+            anchors.fill: parent
+            property real value: parent.percent
+            property color ink: parent.accent
+            property color track: Theme.surfaceVariant
+            onValueChanged: requestPaint()
+            onInkChanged: requestPaint()
+            onTrackChanged: requestPaint()
+            onPaint: {
+                var ctx = getContext("2d");
+                ctx.reset();
+                ctx.lineWidth = 5;
+                ctx.lineCap = "round";
+                ctx.beginPath(); ctx.arc(width/2, height/2, width/2-5, 0, Math.PI*2);
+                ctx.strokeStyle = track; ctx.stroke();
+                if (value > 0) {
+                    ctx.beginPath();
+                    ctx.arc(width/2, height/2, width/2-5, -Math.PI/2, -Math.PI/2+Math.PI*2*Math.min(100,value)/100);
+                    ctx.strokeStyle = ink; ctx.stroke();
+                }
+            }
+        }
+        StyledText {
+            anchors.centerIn: parent
+            text: Math.round(parent.percent) + "%"
+            color: Theme.surfaceText
+            font.pixelSize: 20
+            font.weight: Font.DemiBold
+        }
+    }
 
     popoutContent: Component {
         PopoutComponent {
-            headerText: root.tr("Codex Usage")
-            detailsText: {
-                if (!root.loggedIn)
-                    return "";
-                var parts = [];
-                if (root.account)
-                    parts.push(root.account);
-                if (root.plan)
-                    parts.push(root.plan);
-                if (root.updatedAt)
-                    parts.push("Updated " + new Date(root.updatedAt).toLocaleString());
-                return parts.join("  ·  ");
-            }
+            headerText: "Codex Usage"
+            detailsText: (root.plan ? root.plan + " subscription" : "Local session insights") + "  ·  Last recorded limits"
             showCloseButton: true
-
             Column {
-                width: parent.width - Theme.spacingM * 2
+                width: parent.width - 16
                 anchors.horizontalCenter: parent.horizontalCenter
-                spacing: Theme.spacingL
+                spacing: 10
 
-                // Empty / not-signed-in state
-                StyledRect {
-                    width: parent.width
-                    height: emptyCol.implicitHeight + Theme.spacingL * 2
-                    color: Theme.surfaceContainerHigh
+                Rectangle {
                     visible: !root.loggedIn
-
-                    Column {
-                        id: emptyCol
-                        anchors.centerIn: parent
-                        width: parent.width - Theme.spacingM * 2
-                        spacing: Theme.spacingS
-
-                        DankIcon {
-                            name: root.isLoading ? "hourglass_empty" : "account_circle_off"
-                            size: 28
-                            color: Theme.surfaceVariantText
-                            anchors.horizontalCenter: parent.horizontalCenter
-                        }
-                        StyledText {
-                            text: root.isLoading ? root.tr("Loading...") : root.tr("No usage recorded")
-                            font.pixelSize: Theme.fontSizeMedium
-                            font.weight: Font.Medium
-                            color: Theme.surfaceText
-                            anchors.horizontalCenter: parent.horizontalCenter
-                        }
-                        StyledText {
-                            text: root.tr("Run codex login, then use Codex to record usage.")
-                            font.pixelSize: Theme.fontSizeSmall
-                            color: Theme.surfaceVariantText
-                            wrapMode: Text.WordWrap
-                            horizontalAlignment: Text.AlignHCenter
-                            width: parent.width
-                            visible: !root.isLoading
-                        }
+                    width: parent.width
+                    height: 76
+                    radius: 14
+                    color: Theme.surfaceContainerHigh
+                    StyledText {
+                        anchors.fill: parent
+                        anchors.margins: 16
+                        text: root.isLoading ? "Reading local usage…" : "No quota recorded yet. Run codex login, then use Codex."
+                        color: Theme.surfaceText
+                        font.pixelSize: 13
+                        wrapMode: Text.WordWrap
                     }
                 }
 
-                // One card per model group, each with its limit bars.
                 Repeater {
-                    model: root.loggedIn ? root.groups : []
-                    delegate: StyledRect {
-                        required property var modelData
+                    model: root.loggedIn ? ["primary", "secondary"] : []
+                    delegate: Rectangle {
+                        required property string modelData
+                        property var bucket: root.buckets[modelData] || ({})
+                        property real used: bucket.REMAINING !== undefined ? Math.max(0, Math.min(100, (1-bucket.REMAINING)*100)) : 0
+                        property color accent: modelData === "primary" ? Theme.primary : Theme.secondary
                         width: parent.width
-                        height: groupCol.implicitHeight + Theme.spacingM * 2
+                        height: 108
+                        radius: 16
                         color: Theme.surfaceContainerHigh
-
-                        Column {
-                            id: groupCol
+                        border.color: Theme.outline
+                        Row {
                             anchors.fill: parent
-                            anchors.margins: Theme.spacingM
-                            spacing: Theme.spacingM
-
-                            StyledText {
-                                text: modelData.name
-                                font.pixelSize: Theme.fontSizeMedium
-                                font.weight: Font.Medium
-                                color: Theme.surfaceText
-                            }
-                            StyledText {
-                                text: modelData.desc
-                                font.pixelSize: Theme.fontSizeSmall
-                                color: Theme.surfaceVariantText
-                                wrapMode: Text.WordWrap
-                                width: parent.width
-                                visible: modelData.desc !== ""
-                            }
-
-                            // Limit bars (Weekly + Five Hour)
-                            Repeater {
-                                model: modelData.buckets
-                                delegate: Column {
-                                    required property var modelData
-                                    width: groupCol.width
-                                    spacing: 4
-
-                                    property real usedPct: Math.max(0, Math.min(100, (1 - modelData.remaining) * 100))
-                                    property string resetCd: root.countdown(modelData.reset)
-
-                                    Row {
-                                        width: parent.width
-                                        StyledText {
-                                            text: modelData.label === "Weekly Limit" ? root.tr("Weekly Limit") : (modelData.label === "Five Hour Limit" ? root.tr("Five Hour Limit") : modelData.label)
-                                            font.pixelSize: Theme.fontSizeSmall
-                                            color: Theme.surfaceText
-                                            width: parent.width - usedLabel.implicitWidth
-                                            elide: Text.ElideRight
-                                        }
-                                        StyledText {
-                                            id: usedLabel
-                                            text: Math.round(parent.parent.usedPct) + "% " + root.tr("used")
-                                            font.pixelSize: Theme.fontSizeSmall
-                                            font.weight: Font.Medium
-                                            color: root.progressColor(parent.parent.usedPct)
-                                        }
-                                    }
-
-                                    Rectangle {
-                                        width: parent.width
-                                        height: 6
-                                        radius: 3
-                                        color: Theme.surfaceVariant
-
-                                        Rectangle {
-                                            width: parent.width * Math.min(parent.parent.usedPct / 100, 1)
-                                            height: parent.height
-                                            radius: 3
-                                            color: root.progressColor(parent.parent.usedPct)
-                                            Behavior on width {
-                                                NumberAnimation {
-                                                    duration: 200
-                                                }
-                                            }
-                                        }
-                                    }
-
-                                    StyledText {
-                                        text: {
-                                            var left = (100 - Math.round(parent.usedPct)) + "% " + root.tr("left");
-                                            return parent.resetCd ? left + "  ·  " + root.tr("Resets in") + " " + parent.resetCd : left;
-                                        }
-                                        font.pixelSize: Theme.fontSizeSmall
-                                        color: Theme.surfaceVariantText
-                                    }
+                            anchors.margins: 16
+                            spacing: 18
+                            UsageRing { percent: used; accent: parent.parent.accent }
+                            Column {
+                                width: parent.width - 94
+                                anchors.verticalCenter: parent.verticalCenter
+                                spacing: 5
+                                StyledText {
+                                    text: modelData === "primary" ? "5-HOUR WINDOW" : "WEEKLY WINDOW"
+                                    font.pixelSize: 11
+                                    font.letterSpacing: 1.1
+                                    color: Theme.surfaceVariantText
+                                }
+                                StyledText {
+                                    text: bucket.REMAINING !== undefined ? (100-Math.round(used)) + "% available" : "Not recorded"
+                                    font.pixelSize: 18
+                                    font.weight: Font.DemiBold
+                                    color: accent
+                                }
+                                StyledText {
+                                    text: bucket.RESET ? "Resets in " + root.countdown(bucket.RESET) : "Reset time unavailable"
+                                    font.pixelSize: 11
+                                    color: Theme.surfaceVariantText
+                                    width: parent.width
+                                    elide: Text.ElideRight
                                 }
                             }
                         }
                     }
                 }
 
-                // Bottom padding
-                Item {
-                    width: 1
-                    height: 1
+                Rectangle {
+                    width: parent.width
+                    height: 98
+                    radius: 14
+                    color: Theme.surfaceContainerHigh
+                    Column {
+                        anchors.fill: parent
+                        anchors.margins: 14
+                        spacing: 12
+                        StyledText { text: "TOKEN CONSUMPTION"; font.pixelSize: 10; font.letterSpacing: 1.2; color: Theme.surfaceVariantText }
+                        Row {
+                            width: parent.width
+                            Repeater {
+                                model: [{label:"Today",value:root.stats.today || 0},{label:"7 days",value:root.stats.week || 0},{label:"30 days",value:root.stats.month || 0}]
+                                delegate: Column {
+                                    required property var modelData
+                                    width: parent.width / 3
+                                    spacing: 4
+                                    StyledText { text: root.compact(modelData.value); color: Theme.primary; font.pixelSize: 21; font.weight: Font.DemiBold }
+                                    StyledText { text: modelData.label; color: Theme.surfaceVariantText; font.pixelSize: 11 }
+                                }
+                            }
+                        }
+                    }
                 }
+
+                Rectangle {
+                    width: parent.width
+                    height: 128
+                    radius: 14
+                    color: Theme.surfaceContainerHigh
+                    Column {
+                        anchors.fill: parent
+                        anchors.margins: 14
+                        spacing: 12
+                        StyledText { text: "DAILY ACTIVITY · TOKENS"; font.pixelSize: 10; font.letterSpacing: 1.2; color: Theme.surfaceVariantText }
+                        Row {
+                            width: parent.width
+                            spacing: 7
+                            Repeater {
+                                model: root.stats.daily || []
+                                delegate: Column {
+                                    required property var modelData
+                                    required property int index
+                                    width: (parent.width - 42) / 7
+                                    spacing: 6
+                                    Item {
+                                        width: parent.width
+                                        height: 56
+                                        Rectangle {
+                                            width: parent.width
+                                            height: modelData.tokens > 0 ? Math.max(3, 56 * modelData.tokens / root.maxDaily) : 2
+                                            anchors.bottom: parent.bottom
+                                            radius: 3
+                                            color: index === 6 ? Theme.secondary : Theme.withAlpha(Theme.primary, 0.45)
+                                        }
+                                    }
+                                    StyledText { text: modelData.day; anchors.horizontalCenter: parent.horizontalCenter; font.pixelSize: 10; color: index === 6 ? Theme.secondary : Theme.surfaceVariantText }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    width: parent.width
+                    height: modelColumn.implicitHeight + 28
+                    radius: 14
+                    color: Theme.surfaceContainerHigh
+                    Column {
+                        id: modelColumn
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.top: parent.top
+                        anchors.margins: 14
+                        spacing: 10
+                        StyledText { text: "MODELS · LAST 7 DAYS"; font.pixelSize: 10; font.letterSpacing: 1.2; color: Theme.surfaceVariantText }
+                        StyledText { visible: !(root.stats.models || []).length; text: "No local token activity yet"; color: Theme.surfaceVariantText; font.pixelSize: 12 }
+                        Repeater {
+                            model: root.stats.models || []
+                            delegate: Column {
+                                required property var modelData
+                                width: modelColumn.width
+                                spacing: 5
+                                Row {
+                                    width: parent.width
+                                    StyledText { text: modelData.name; width: parent.width - 65; elide: Text.ElideRight; color: Theme.surfaceText; font.pixelSize: 11 }
+                                    StyledText { text: root.compact(modelData.tokens); width: 65; horizontalAlignment: Text.AlignRight; color: Theme.surfaceVariantText; font.pixelSize: 11 }
+                                }
+                                Rectangle {
+                                    width: parent.width
+                                    height: 4
+                                    radius: 2
+                                    color: Theme.surfaceVariant
+                                    Rectangle { width: parent.width * Math.min(1, modelData.tokens / Math.max(1, root.stats.week || 0)); height: 4; radius: 2; color: Theme.secondary }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                StyledText {
+                    width: parent.width
+                    text: "LOCAL LOGS  ·  " + (root.stats.sessions || 0) + " sessions / 7d\n" + (root.updatedAt ? "Quota snapshot: " + new Date(root.updatedAt).toLocaleString(Qt.locale(), "MMM d, hh:mm AP") : "Waiting for a quota snapshot")
+                    font.pixelSize: 10
+                    color: Theme.surfaceVariantText
+                    horizontalAlignment: Text.AlignHCenter
+                    wrapMode: Text.WordWrap
+                }
+                Item { width: 1; height: 4 }
             }
         }
     }

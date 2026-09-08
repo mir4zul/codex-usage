@@ -38,3 +38,28 @@ class SnapshotTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+class ActivityTests(unittest.TestCase):
+    def test_deltas_cache_and_append(self):
+        import datetime
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)/'sessions'; root.mkdir()
+            cache = Path(d)/'cache.json'
+            path = root/'session.jsonl'
+            def token(total):
+                return json.dumps({'timestamp': '2026-09-08T12:00:00Z', 'payload': {'type': 'token_count', 'info': {'total_token_usage': {'total_tokens': total}}}})+'\n'
+            path.write_text(json.dumps({'type': 'turn_context', 'payload': {'model': 'test-model'}})+'\n'+token(100)+token(100)+token(150))
+            today = datetime.date(2026, 9, 8)
+            first = usage.activity(root, cache, today)
+            self.assertEqual(first['today'], 150)
+            self.assertEqual(first['models'], [{'name': 'test-model', 'tokens': 150}])
+            self.assertEqual(usage.activity(root, cache, today), first)
+            with path.open('a') as stream: stream.write(token(180))
+            self.assertEqual(usage.activity(root, cache, today)['today'], 180)
+
+    def test_empty_activity(self):
+        with tempfile.TemporaryDirectory() as d:
+            stats = usage.activity(Path(d))
+            self.assertEqual(stats['week'], 0)
+            self.assertEqual(len(stats['daily']), 7)
+            self.assertEqual(stats['models'], [])

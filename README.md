@@ -12,6 +12,9 @@ A compact DankBar widget with two progress rings: **five-hour usage on top, week
 - Five-hour and weekly usage shown together in the popout.
 - Theme-aware colors that change as a limit fills up.
 - Reset countdowns and the snapshot timestamp.
+- Theme-adaptive quota cards with large progress rings.
+- Local token totals for today, the last 7 days, and the last 30 days.
+- A seven-day activity chart and the top four models by local token usage.
 - Reads local Codex session logs every 30 seconds. No API calls or additional sign-in.
 - Python standard library only.
 
@@ -45,6 +48,8 @@ The top ring is the five-hour limit; the bottom ring is the weekly limit. Percen
 The helper reads `~/.codex/sessions/**/*.jsonl`, or `$CODEX_HOME/sessions` when `CODEX_HOME` is set in the DMS process environment. It selects the newest Codex quota snapshot and ignores separate premium-limit snapshots.
 
 These are **last recorded values**, not a live account query. Usage from another device or an idle session will not appear until Codex records a new local snapshot. After a reset, old percentages remain until a fresh snapshot arrives. Check the “Updated” timestamp before relying on a number. Countdown text is computed locally and refreshed every minute.
+
+Token activity is a local estimate from positive cumulative-token deltas, including cached input tokens. Repeated unchanged totals add no tokens. Days use the system timezone; 7/30-day totals are rolling calendar-day windows. Forked or copied session histories can overlap, and missing logs cannot be counted. These figures are not billing amounts or account-wide totals. Parsed per-file token aggregates are cached under `$XDG_CACHE_HOME/codexUsage` (normally `~/.cache/codexUsage`); no conversation text is cached.
 
 This does not show general ChatGPT conversation usage. API-key sessions or Codex versions without compatible quota logs may show “No usage recorded”. The local log format can change between Codex versions.
 

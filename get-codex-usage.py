@@ -51,12 +51,87 @@ def snapshots(root):
     return newest
 
 
+def activity(root, cache_path=None, today=None):
+    """Aggregate positive cumulative-token deltas; repeated quota events add zero."""
+    today = today or datetime.datetime.now().astimezone().date()
+    cutoff = (today - datetime.timedelta(days=29)).isoformat()
+    try:
+        cache = json.loads(cache_path.read_text()) if cache_path else {}
+    except (OSError, ValueError):
+        cache = {}
+    updated = {}
+    days = {}
+    models = {}
+    sessions = set()
+    week_start = (today - datetime.timedelta(days=6)).isoformat()
+    for path in root.rglob('*.jsonl'):
+        try:
+            stat = path.stat()
+            key = str(path)
+            signature = [stat.st_size, stat.st_mtime_ns]
+            saved = cache.get(key, {})
+            if saved.get('signature') != signature:
+                entries = {}
+                previous = 0
+                model = 'Unknown'
+                with path.open() as stream:
+                    for line in stream:
+                        try:
+                            row = json.loads(line)
+                            payload = row.get('payload', {})
+                            if row.get('type') == 'turn_context':
+                                model = payload.get('model') or model
+                            if payload.get('type') != 'token_count':
+                                continue
+                            info = payload.get('info') or {}
+                            total = (info.get('total_token_usage') or {}).get('total_tokens')
+                            if not isinstance(total, (int, float)) or total < 0:
+                                continue
+                            delta = max(0, total - previous)
+                            previous = total
+                            day = datetime.datetime.fromisoformat(row['timestamp'].replace('Z', '+00:00')).astimezone().date().isoformat()
+                            if day < cutoff or not delta:
+                                continue
+                            entry = day + '|' + model
+                            entries[entry] = entries.get(entry, 0) + delta
+                        except (ValueError, KeyError, TypeError, AttributeError):
+                            continue
+                saved = {'signature': signature, 'entries': entries}
+            updated[key] = saved
+            for entry, count in saved.get('entries', {}).items():
+                day, model = entry.split('|', 1)
+                if cutoff <= day <= today.isoformat():
+                    days[day] = days.get(day, 0) + count
+                    if day >= week_start:
+                        models[model] = models.get(model, 0) + count
+                        sessions.add(key)
+        except OSError:
+            continue
+    if cache_path:
+        try:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            temp = cache_path.with_suffix('.tmp')
+            temp.write_text(json.dumps(updated))
+            temp.replace(cache_path)
+        except OSError:
+            pass
+    daily = []
+    for offset in range(6, -1, -1):
+        day = today - datetime.timedelta(days=offset)
+        daily.append({'day': day.strftime('%a'), 'tokens': days.get(day.isoformat(), 0)})
+    return {'today': days.get(today.isoformat(), 0), 'week': sum(d['tokens'] for d in daily),
+            'month': sum(days.values()), 'daily': daily, 'sessions': len(sessions),
+            'models': [{'name': name, 'tokens': count} for name, count in sorted(models.items(), key=lambda v: v[1], reverse=True)[:4]]}
+
+
 def emit(key, value):
     print(f'{key}={str(value).replace(chr(10), " ").replace(chr(13), " ")}')
 
 
 def main():
     root = Path(os.environ.get('CODEX_HOME', str(Path.home()/'.codex'))) / 'sessions'
+    cache = Path(os.environ.get('XDG_CACHE_HOME', str(Path.home()/'.cache'))) / 'codexUsage/activity-v1.json'
+    emit('STATS', json.dumps(activity(root, cache), separators=(',', ':')))
     snapshot = snapshots(root)
     emit('GROUPS', '')
     emit('LOGGED_IN', 'false')
