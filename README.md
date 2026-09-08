@@ -2,21 +2,25 @@
 
 Your Codex limits, one glance away.
 
-A compact DankBar widget with two progress rings: **five-hour usage on top, weekly usage below**. Click to see both limit bars, remaining percentages, reset countdowns, and the timestamp of the latest local snapshot.
+A compact DankBar widget with two progress rings: **five-hour usage on top, weekly usage below**. Click for side-by-side quota cards, animated usage rings, reset countdowns, and local token activity.
 
 ![Codex Usage widget and popout](assets/screenshot.png)
 
 ## Features
 
 - Two stacked progress rings for vertical bars; labeled percentages for horizontal bars.
-- Five-hour and weekly usage shown together in the popout.
-- Theme-aware colors that change as a limit fills up.
-- Reset countdowns and the snapshot timestamp.
-- Theme-adaptive quota cards with large progress rings.
+- Side-by-side five-hour and weekly quota cards with explicit **used** labels and remaining percentages.
+- Theme-aware colors, subtle card borders, and animated rings and charts.
+- Reset countdowns, relative snapshot age, and a stale-data indicator.
 - Local token totals for today, the last 7 days, and the last 30 days.
-- A seven-day activity chart and the top four models by local token usage.
-- Reads local Codex session logs every 30 seconds. No API calls or additional sign-in.
-- Python standard library only.
+- Switchable **7d / 30d** activity chart; hover a bar for its date and exact token count.
+- Seven-day activity compared with the previous seven days when that period has recorded tokens.
+- Top four models over the last seven days, with token counts and percentage shares.
+- Seven-day input, output, and cached-input breakdown when present in the logs.
+- Expandable details, with the selected view and chart period saved between reloads.
+- Optional **80% / 90%** quota alerts, off by default.
+- Reads local Codex session logs every 30 seconds; a **Refresh** button rereads them immediately.
+- No API calls, additional sign-in, or Python dependencies beyond the standard library.
 
 ## Requirements
 
@@ -43,13 +47,20 @@ If necessary, run `codex login` and finish the browser sign-in. Use Codex for a 
 
 The top ring is the five-hour limit; the bottom ring is the weekly limit. Percentages show **used**, not remaining, quota.
 
+## Dashboard controls
+
+- **7d / 30d:** Change the activity chart period. Hover a bar to see its exact count above the chart. Model rankings and the token breakdown always cover seven days.
+- **Less detail / More detail:** Collapse or expand the chart, model rankings, and token breakdown.
+- **Alerts off / Alerts on:** Enable DMS warning toasts at 80% and 90% used quota. Each threshold is reported at most once per quota window, with alert history saved across reloads. Alerts use fresh local snapshots and skip expired windows; they are not background account monitoring.
+- **Refresh:** Reread local logs. This does not request new usage data from the account.
+
 ## How it works and limitations
 
 The helper reads `~/.codex/sessions/**/*.jsonl`, or `$CODEX_HOME/sessions` when `CODEX_HOME` is set in the DMS process environment. It selects the newest Codex quota snapshot and ignores separate premium-limit snapshots.
 
-These are **last recorded values**, not a live account query. Usage from another device or an idle session will not appear until Codex records a new local snapshot. After a reset, old percentages remain until a fresh snapshot arrives. Check the “Updated” timestamp before relying on a number. Countdown text is computed locally and refreshed every minute.
+These are **last recorded values**, not a live account query. Usage from another device or an idle session will not appear until Codex records a new local snapshot. Snapshots older than 30 minutes are marked **Stale**. After a reset, old percentages remain with **Waiting for fresh data** until a fresh snapshot arrives. Check the update age before relying on a number. Countdown text is computed locally and refreshed every minute.
 
-Token activity is a local estimate from positive cumulative-token deltas, including cached input tokens. Repeated unchanged totals add no tokens. Days use the system timezone; 7/30-day totals are rolling calendar-day windows. Forked or copied session histories can overlap, and missing logs cannot be counted. These figures are not billing amounts or account-wide totals. Parsed per-file token aggregates are cached under `$XDG_CACHE_HOME/codexUsage` (normally `~/.cache/codexUsage`); no conversation text is cached.
+Token activity is a local estimate from positive cumulative-token deltas, including cached input tokens. Repeated unchanged totals add no tokens. Days use the system timezone; 7/30-day totals are rolling calendar-day windows. Forked or copied session histories can overlap, and missing logs cannot be counted. Cached input is a subset of input, not an additional amount to add to the total. Breakdowns depend on the fields recorded in the logs and can be unavailable or partial. These figures are not billing amounts or account-wide totals. Parsed per-file token aggregates are cached under `$XDG_CACHE_HOME/codexUsage` (normally `~/.cache/codexUsage`); no conversation text is cached.
 
 This does not show general ChatGPT conversation usage. API-key sessions or Codex versions without compatible quota logs may show “No usage recorded”. The local log format can change between Codex versions.
 

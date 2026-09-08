@@ -29,7 +29,55 @@ PluginComponent {
     property string cliVersion: ""
     property string updatedAt: ""
     property var stats: ({})
-    property real maxDaily: Math.max.apply(null, [1].concat((stats.daily || []).map(function(d) { return d.tokens; })))
+    property real maxDaily: Math.max.apply(null, [1].concat(chartData.map(function(d) { return d.tokens; })))
+    property bool detailsExpanded: pluginData.detailsExpanded !== false
+    property bool alertsEnabled: pluginData.alertsEnabled === true
+    property int chartDays: pluginData.chartDays === 30 ? 30 : 7
+    property var chartData: chartDays === 30 ? (stats.daily30 || []) : (stats.daily || [])
+    property string hoveredDay: ""
+    onChartDaysChanged: hoveredDay = ""
+    property real snapshotAge: updatedAt ? Math.max(0, countdownNow - new Date(updatedAt).getTime()) : Infinity
+    property bool snapshotStale: !isFinite(snapshotAge) || snapshotAge > 30 * 60000
+    property string freshnessText: {
+        if (!updatedAt) return "Waiting for a local snapshot";
+        if (!isFinite(snapshotAge)) return "Snapshot time unavailable";
+        var minutes = Math.floor(snapshotAge / 60000);
+        var age = minutes < 1 ? "just now" : (minutes < 60 ? minutes + " min ago" : (minutes < 1440 ? Math.floor(minutes / 60) + "h ago" : Math.floor(minutes / 1440) + "d ago"));
+        return (snapshotStale ? "Stale · " : "Updated ") + age;
+    }
+    property string weekTrend: {
+        var previous = stats.previous_week || 0;
+        if (!previous) return "Daily tokens · last 7 days";
+        var change = Math.round(((stats.week || 0) - previous) / previous * 100);
+        return (change > 0 ? "+" : "") + change + "% vs previous 7 days";
+    }
+    property string breakdownText: {
+        var b = stats.breakdown_week || {};
+        if (b.input_tokens === undefined && b.output_tokens === undefined) return "Token breakdown unavailable in local logs";
+        return "7d input " + compact(b.input_tokens || 0) + " · output " + compact(b.output_tokens || 0)
+            + "\nCached input " + compact(b.cached_input_tokens || 0) + " (included in input)";
+    }
+    function savePreference(key, value) {
+        SettingsData.setPluginSetting("codexUsage", key, value);
+        pluginData = SettingsData.getPluginSettingsForPlugin("codexUsage");
+    }
+    function checkAlerts() {
+        if (!alertsEnabled || snapshotStale || !loggedIn) return;
+        var seen = Object.assign({}, pluginData.alertHistory || {});
+        var changed = false;
+        ["primary", "secondary"].forEach(function(id) {
+            var b = buckets[id];
+            if (!b || b.REMAINING === undefined || !b.RESET || new Date(b.RESET).getTime() <= Date.now()) return;
+            var used = Math.max(0, Math.min(100, (1 - Number(b.REMAINING)) * 100));
+            var level = used >= 90 ? 90 : (used >= 80 ? 80 : 0);
+            var prior = seen[id] || {};
+            if (!level || (prior.reset === b.RESET && prior.level >= level)) return;
+            ToastService.showWarning("Codex " + (id === "primary" ? "5-hour" : "weekly") + " usage: " + Math.round(used) + "%", "Last local snapshot · resets in " + countdown(b.RESET));
+            seen[id] = {reset: b.RESET, level: level};
+            changed = true;
+        });
+        if (changed) savePreference("alertHistory", seen);
+    }
     function compact(value) {
         if (value >= 1000000000) return (value / 1000000000).toFixed(1) + "B";
         if (value >= 1000000) return (value / 1000000).toFixed(1) + "M";
@@ -94,8 +142,8 @@ PluginComponent {
         return maxUsed;
     }
 
-    popoutWidth: 380
-    popoutHeight: 760
+    popoutWidth: 420
+    popoutHeight: detailsExpanded ? 820 : 500
 
     // --- Helpers ---
 
@@ -199,6 +247,7 @@ PluginComponent {
 
         onExited: (exitCode, exitStatus) => {
             root.isLoading = false;
+            if (exitCode === 0) root.checkAlerts();
         }
     }
 
@@ -331,6 +380,7 @@ PluginComponent {
         Canvas {
             anchors.fill: parent
             property real value: parent.percent
+            Behavior on value { NumberAnimation { duration: 350; easing.type: Easing.OutCubic } }
             property color ink: parent.accent
             property color track: Theme.surfaceVariant
             onValueChanged: requestPaint()
@@ -352,78 +402,137 @@ PluginComponent {
         }
         StyledText {
             anchors.centerIn: parent
-            text: Math.round(parent.percent) + "%"
+            text: Math.round(parent.percent) + "%\nused"
+            horizontalAlignment: Text.AlignHCenter
             color: Theme.surfaceText
-            font.pixelSize: 20
+            font.pixelSize: 17
             font.weight: Font.DemiBold
+        }
+    }
+
+    component ActionChip: Rectangle {
+        id: chip
+        property string label: ""
+        property bool selected: false
+        signal clicked()
+        width: chipText.implicitWidth + 22
+        height: 30
+        radius: 15
+        color: selected ? Theme.withAlpha(Theme.primary, 0.16) : (chipMouse.containsMouse ? Theme.surfaceContainerHigh : "transparent")
+        StyledText {
+            id: chipText
+            anchors.centerIn: parent
+            text: chip.label
+            font.pixelSize: 12
+            font.weight: chip.selected ? Font.DemiBold : Font.Normal
+            color: chip.selected ? Theme.primary : Theme.surfaceVariantText
+        }
+        MouseArea {
+            id: chipMouse
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: chip.clicked()
         }
     }
 
     popoutContent: Component {
         PopoutComponent {
             headerText: "Codex Usage"
-            detailsText: (root.plan ? root.plan + " subscription" : "Local session insights") + "  ·  Last recorded limits"
+            detailsText: (root.plan || "Codex") + " · Local usage insights"
             showCloseButton: true
             Column {
                 width: parent.width - 16
                 anchors.horizontalCenter: parent.horizontalCenter
-                spacing: 10
+                spacing: 12
 
-                Rectangle {
-                    visible: !root.loggedIn
+                Row {
                     width: parent.width
-                    height: 76
-                    radius: 14
-                    color: Theme.surfaceContainerHigh
+                    spacing: 6
+                    Rectangle {
+                        width: 7; height: 7; radius: 4
+                        anchors.verticalCenter: parent.verticalCenter
+                        color: root.snapshotStale ? Theme.warning : Theme.primary
+                    }
                     StyledText {
-                        anchors.fill: parent
-                        anchors.margins: 16
-                        text: root.isLoading ? "Reading local usage…" : "No quota recorded yet. Run codex login, then use Codex."
-                        color: Theme.surfaceText
-                        font.pixelSize: 13
-                        wrapMode: Text.WordWrap
+                        width: parent.width - refreshChip.width - 19
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: root.freshnessText
+                        color: root.snapshotStale ? Theme.warning : Theme.surfaceVariantText
+                        font.pixelSize: 12
+                        elide: Text.ElideRight
+                    }
+                    ActionChip {
+                        id: refreshChip
+                        label: root.isLoading ? "Reading…" : "Refresh"
+                        onClicked: {
+                            if (!usageProcess.running) {
+                                root.isLoading = true;
+                                usageProcess.running = true;
+                            }
+                        }
                     }
                 }
 
-                Repeater {
-                    model: root.loggedIn ? ["primary", "secondary"] : []
-                    delegate: Rectangle {
-                        required property string modelData
-                        property var bucket: root.buckets[modelData] || ({})
-                        property real used: bucket.REMAINING !== undefined ? Math.max(0, Math.min(100, (1-bucket.REMAINING)*100)) : 0
-                        property color accent: modelData === "primary" ? Theme.primary : Theme.secondary
-                        width: parent.width
-                        height: 108
-                        radius: 16
-                        color: Theme.surfaceContainerHigh
-                        border.color: Theme.outline
-                        Row {
-                            anchors.fill: parent
-                            anchors.margins: 16
-                            spacing: 18
-                            UsageRing { percent: used; accent: parent.parent.accent }
+                Rectangle {
+                    visible: !root.loggedIn
+                    width: parent.width; height: 72; radius: 16
+                    color: Theme.surfaceContainerHigh
+                    StyledText {
+                        anchors.fill: parent; anchors.margins: 16
+                        text: root.isLoading ? "Reading local usage…" : "No quota snapshot yet. Use Codex to record your limits."
+                        wrapMode: Text.WordWrap; font.pixelSize: 13
+                        color: Theme.surfaceVariantText
+                    }
+                }
+
+                Row {
+                    width: parent.width
+                    spacing: 12
+                    visible: root.loggedIn
+                    Repeater {
+                        model: ["primary", "secondary"]
+                        delegate: Rectangle {
+                            id: quotaCard
+                            required property string modelData
+                            property var bucket: root.buckets[modelData] || ({})
+                            property bool recorded: bucket.REMAINING !== undefined
+                            property real used: recorded ? Math.max(0, Math.min(100, (1-bucket.REMAINING)*100)) : 0
+                            property bool expired: bucket.RESET ? new Date(bucket.RESET).getTime() <= root.countdownNow : false
+                            property color accent: used >= 80 ? Theme.error : (used >= 50 ? Theme.warning : (modelData === "primary" ? Theme.primary : Theme.secondary))
+                            width: (parent.width - 12) / 2
+                            height: 208; radius: 20
+                            color: Theme.surfaceContainerHigh
+                            border.width: 1
+                            border.color: Theme.withAlpha(accent, 0.16)
                             Column {
-                                width: parent.width - 94
-                                anchors.verticalCenter: parent.verticalCenter
-                                spacing: 5
+                                anchors.fill: parent; anchors.margins: 14
+                                spacing: 9
                                 StyledText {
-                                    text: modelData === "primary" ? "5-HOUR WINDOW" : "WEEKLY WINDOW"
-                                    font.pixelSize: 11
-                                    font.letterSpacing: 1.1
-                                    color: Theme.surfaceVariantText
+                                    anchors.horizontalCenter: parent.horizontalCenter
+                                    text: quotaCard.modelData === "primary" ? "5-hour limit" : "Weekly limit"
+                                    font.pixelSize: 14; font.weight: Font.DemiBold
+                                    color: Theme.surfaceText
+                                }
+                                UsageRing {
+                                    anchors.horizontalCenter: parent.horizontalCenter
+                                    width: 88; height: 88
+                                    percent: quotaCard.used
+                                    accent: quotaCard.accent
+                                    opacity: quotaCard.recorded ? 1 : 0.35
                                 }
                                 StyledText {
-                                    text: bucket.REMAINING !== undefined ? (100-Math.round(used)) + "% available" : "Not recorded"
-                                    font.pixelSize: 18
-                                    font.weight: Font.DemiBold
-                                    color: accent
+                                    anchors.horizontalCenter: parent.horizontalCenter
+                                    text: quotaCard.recorded ? (100-Math.round(quotaCard.used)) + "% remaining" : "Not recorded"
+                                    font.pixelSize: 13; color: quotaCard.accent
                                 }
                                 StyledText {
-                                    text: bucket.RESET ? "Resets in " + root.countdown(bucket.RESET) : "Reset time unavailable"
-                                    font.pixelSize: 11
-                                    color: Theme.surfaceVariantText
                                     width: parent.width
-                                    elide: Text.ElideRight
+                                    horizontalAlignment: Text.AlignHCenter
+                                    text: quotaCard.expired ? "Waiting for fresh data" : (quotaCard.bucket.RESET ? "Reset in " + root.countdown(quotaCard.bucket.RESET) : "Reset unavailable")
+                                    font.pixelSize: 11
+                                    color: quotaCard.expired ? Theme.warning : Theme.surfaceVariantText
+                                    wrapMode: Text.WordWrap
                                 }
                             }
                         }
@@ -431,63 +540,92 @@ PluginComponent {
                 }
 
                 Rectangle {
-                    width: parent.width
-                    height: 98
-                    radius: 14
+                    width: parent.width; height: 94; radius: 18
                     color: Theme.surfaceContainerHigh
                     Column {
-                        anchors.fill: parent
-                        anchors.margins: 14
-                        spacing: 12
-                        StyledText { text: "TOKEN CONSUMPTION"; font.pixelSize: 10; font.letterSpacing: 1.2; color: Theme.surfaceVariantText }
+                        anchors.fill: parent; anchors.margins: 14; spacing: 10
+                        StyledText { text: "Token activity"; font.pixelSize: 13; color: Theme.surfaceVariantText }
                         Row {
                             width: parent.width
                             Repeater {
                                 model: [{label:"Today",value:root.stats.today || 0},{label:"7 days",value:root.stats.week || 0},{label:"30 days",value:root.stats.month || 0}]
                                 delegate: Column {
                                     required property var modelData
-                                    width: parent.width / 3
-                                    spacing: 4
-                                    StyledText { text: root.compact(modelData.value); color: Theme.primary; font.pixelSize: 21; font.weight: Font.DemiBold }
-                                    StyledText { text: modelData.label; color: Theme.surfaceVariantText; font.pixelSize: 11 }
+                                    width: parent.width / 3; spacing: 3
+                                    StyledText { text: root.compact(modelData.value); color: Theme.surfaceText; font.pixelSize: 23; font.weight: Font.DemiBold }
+                                    StyledText { text: modelData.label; color: Theme.surfaceVariantText; font.pixelSize: 12 }
                                 }
                             }
                         }
                     }
                 }
 
+                Row {
+                    width: parent.width; spacing: 6
+                    ActionChip {
+                        label: root.detailsExpanded ? "Less detail ↑" : "More detail ↓"
+                        selected: root.detailsExpanded
+                        onClicked: root.savePreference("detailsExpanded", !root.detailsExpanded)
+                    }
+                    ActionChip {
+                        label: root.alertsEnabled ? "Alerts on · 80/90%" : "Alerts off"
+                        selected: root.alertsEnabled
+                        onClicked: root.savePreference("alertsEnabled", !root.alertsEnabled)
+                    }
+                }
+
                 Rectangle {
-                    width: parent.width
-                    height: 128
-                    radius: 14
+                    visible: root.detailsExpanded
+                    width: parent.width; height: 180; radius: 18
                     color: Theme.surfaceContainerHigh
                     Column {
-                        anchors.fill: parent
-                        anchors.margins: 14
-                        spacing: 12
-                        StyledText { text: "DAILY ACTIVITY · TOKENS"; font.pixelSize: 10; font.letterSpacing: 1.2; color: Theme.surfaceVariantText }
+                        anchors.fill: parent; anchors.margins: 14; spacing: 8
                         Row {
                             width: parent.width
-                            spacing: 7
+                            StyledText {
+                                text: "Activity"; width: parent.width - 112
+                                anchors.verticalCenter: parent.verticalCenter
+                                font.pixelSize: 14; font.weight: Font.DemiBold; color: Theme.surfaceText
+                            }
+                            ActionChip { label: "7d"; selected: root.chartDays === 7; onClicked: root.savePreference("chartDays", 7) }
+                            ActionChip { label: "30d"; selected: root.chartDays === 30; onClicked: root.savePreference("chartDays", 30) }
+                        }
+                        StyledText {
+                            text: root.hoveredDay || (root.chartDays === 7 ? root.weekTrend : "Daily tokens · last 30 days")
+                            width: parent.width; elide: Text.ElideRight
+                            font.pixelSize: 12; color: root.hoveredDay ? Theme.primary : Theme.surfaceVariantText
+                        }
+                        Row {
+                            width: parent.width; spacing: root.chartDays === 7 ? 8 : 3
                             Repeater {
-                                model: root.stats.daily || []
+                                model: root.chartData
                                 delegate: Column {
                                     required property var modelData
                                     required property int index
-                                    width: (parent.width - 42) / 7
+                                    width: (parent.width - parent.spacing * (root.chartData.length - 1)) / Math.max(1, root.chartData.length)
                                     spacing: 6
                                     Item {
-                                        width: parent.width
-                                        height: 56
+                                        width: parent.width; height: 64
                                         Rectangle {
-                                            width: parent.width
-                                            height: modelData.tokens > 0 ? Math.max(3, 56 * modelData.tokens / root.maxDaily) : 2
                                             anchors.bottom: parent.bottom
-                                            radius: 3
-                                            color: index === 6 ? Theme.secondary : Theme.withAlpha(Theme.primary, 0.45)
+                                            width: parent.width
+                                            height: modelData.tokens > 0 ? Math.max(3, 64 * modelData.tokens / root.maxDaily) : 2
+                                            radius: Math.min(4, width / 2)
+                                            color: dayHover.containsMouse || index === root.chartData.length - 1 ? Theme.primary : Theme.withAlpha(Theme.primary, 0.36)
+                                            Behavior on height { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
+                                        }
+                                        MouseArea {
+                                            id: dayHover
+                                            anchors.fill: parent; hoverEnabled: true
+                                            onEntered: root.hoveredDay = modelData.date + " · " + Number(modelData.tokens).toLocaleString(Qt.locale(), 'f', 0) + " tokens"
+                                            onExited: root.hoveredDay = ""
                                         }
                                     }
-                                    StyledText { text: modelData.day; anchors.horizontalCenter: parent.horizontalCenter; font.pixelSize: 10; color: index === 6 ? Theme.secondary : Theme.surfaceVariantText }
+                                    StyledText {
+                                        anchors.horizontalCenter: parent.horizontalCenter
+                                        text: root.chartDays === 7 ? modelData.day : ((index === 0 || index === 14 || index === 29) ? modelData.date.slice(8) : "")
+                                        font.pixelSize: 10; color: Theme.surfaceVariantText
+                                    }
                                 }
                             }
                         }
@@ -495,49 +633,47 @@ PluginComponent {
                 }
 
                 Rectangle {
-                    width: parent.width
-                    height: modelColumn.implicitHeight + 28
-                    radius: 14
+                    visible: root.detailsExpanded
+                    width: parent.width; height: modelColumn.implicitHeight + 28; radius: 18
                     color: Theme.surfaceContainerHigh
                     Column {
                         id: modelColumn
-                        anchors.left: parent.left
-                        anchors.right: parent.right
-                        anchors.top: parent.top
-                        anchors.margins: 14
-                        spacing: 10
-                        StyledText { text: "MODELS · LAST 7 DAYS"; font.pixelSize: 10; font.letterSpacing: 1.2; color: Theme.surfaceVariantText }
-                        StyledText { visible: !(root.stats.models || []).length; text: "No local token activity yet"; color: Theme.surfaceVariantText; font.pixelSize: 12 }
+                        anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
+                        anchors.margins: 14; spacing: 10
+                        StyledText { text: "Top models · 7 days"; font.pixelSize: 14; font.weight: Font.DemiBold; color: Theme.surfaceText }
+                        StyledText { visible: !(root.stats.models || []).length; text: "No local token activity yet"; font.pixelSize: 12; color: Theme.surfaceVariantText }
                         Repeater {
                             model: root.stats.models || []
                             delegate: Column {
                                 required property var modelData
-                                width: modelColumn.width
-                                spacing: 5
+                                width: modelColumn.width; spacing: 5
                                 Row {
                                     width: parent.width
-                                    StyledText { text: modelData.name; width: parent.width - 65; elide: Text.ElideRight; color: Theme.surfaceText; font.pixelSize: 11 }
-                                    StyledText { text: root.compact(modelData.tokens); width: 65; horizontalAlignment: Text.AlignRight; color: Theme.surfaceVariantText; font.pixelSize: 11 }
+                                    StyledText { text: modelData.name; width: parent.width - 106; elide: Text.ElideRight; font.pixelSize: 12; color: Theme.surfaceText }
+                                    StyledText { text: root.compact(modelData.tokens) + " · " + Math.round(100 * modelData.tokens / Math.max(1, root.stats.week || 0)) + "%"; width: 106; horizontalAlignment: Text.AlignRight; font.pixelSize: 12; color: Theme.surfaceVariantText }
                                 }
                                 Rectangle {
-                                    width: parent.width
-                                    height: 4
-                                    radius: 2
-                                    color: Theme.surfaceVariant
-                                    Rectangle { width: parent.width * Math.min(1, modelData.tokens / Math.max(1, root.stats.week || 0)); height: 4; radius: 2; color: Theme.secondary }
+                                    width: parent.width; height: 4; radius: 2; color: Theme.surfaceVariant
+                                    Rectangle {
+                                        width: parent.width * Math.min(1, modelData.tokens / Math.max(1, root.stats.week || 0))
+                                        height: 4; radius: 2; color: Theme.secondary
+                                        Behavior on width { NumberAnimation { duration: 220 } }
+                                    }
                                 }
                             }
                         }
+                        StyledText {
+                            width: parent.width
+                            text: root.breakdownText
+                            font.pixelSize: 11; color: Theme.surfaceVariantText; wrapMode: Text.WordWrap
+                        }
                     }
                 }
-
                 StyledText {
                     width: parent.width
-                    text: "LOCAL LOGS  ·  " + (root.stats.sessions || 0) + " sessions / 7d\n" + (root.updatedAt ? "Quota snapshot: " + new Date(root.updatedAt).toLocaleString(Qt.locale(), "MMM d, hh:mm AP") : "Waiting for a quota snapshot")
-                    font.pixelSize: 10
-                    color: Theme.surfaceVariantText
-                    horizontalAlignment: Text.AlignHCenter
-                    wrapMode: Text.WordWrap
+                    text: "Local estimates · " + (root.stats.sessions || 0) + " sessions / 7 days\nRefresh reads local logs; it does not fetch live quota."
+                    font.pixelSize: 11; color: Theme.surfaceVariantText
+                    horizontalAlignment: Text.AlignHCenter; wrapMode: Text.WordWrap
                 }
                 Item { width: 1; height: 4 }
             }

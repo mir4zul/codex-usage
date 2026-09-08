@@ -61,6 +61,7 @@ def activity(root, cache_path=None, today=None):
         cache = {}
     updated = {}
     days = {}
+    breakdown_days = {}
     models = {}
     sessions = set()
     week_start = (today - datetime.timedelta(days=6)).isoformat()
@@ -72,6 +73,8 @@ def activity(root, cache_path=None, today=None):
             saved = cache.get(key, {})
             if saved.get('signature') != signature:
                 entries = {}
+                breakdown = {}
+                previous_parts = {}
                 previous = 0
                 model = 'Unknown'
                 with path.open() as stream:
@@ -84,9 +87,16 @@ def activity(root, cache_path=None, today=None):
                             if payload.get('type') != 'token_count':
                                 continue
                             info = payload.get('info') or {}
-                            total = (info.get('total_token_usage') or {}).get('total_tokens')
+                            parts = info.get('total_token_usage') or {}
+                            total = parts.get('total_tokens')
                             if not isinstance(total, (int, float)) or total < 0:
                                 continue
+                            part_deltas = {}
+                            for field in ('input_tokens', 'output_tokens', 'cached_input_tokens'):
+                                value = parts.get(field)
+                                if isinstance(value, (int, float)) and value >= 0:
+                                    part_deltas[field] = max(0, value - previous_parts.get(field, 0))
+                                    previous_parts[field] = value
                             delta = max(0, total - previous)
                             previous = total
                             day = datetime.datetime.fromisoformat(row['timestamp'].replace('Z', '+00:00')).astimezone().date().isoformat()
@@ -94,10 +104,18 @@ def activity(root, cache_path=None, today=None):
                                 continue
                             entry = day + '|' + model
                             entries[entry] = entries.get(entry, 0) + delta
+                            target = breakdown.setdefault(day, {})
+                            for field, value in part_deltas.items():
+                                target[field] = target.get(field, 0) + value
                         except (ValueError, KeyError, TypeError, AttributeError):
                             continue
-                saved = {'signature': signature, 'entries': entries}
+                saved = {'signature': signature, 'entries': entries, 'breakdown': breakdown}
             updated[key] = saved
+            for day, parts in saved.get('breakdown', {}).items():
+                if cutoff <= day <= today.isoformat():
+                    target = breakdown_days.setdefault(day, {})
+                    for field, value in parts.items():
+                        target[field] = target.get(field, 0) + value
             for entry, count in saved.get('entries', {}).items():
                 day, model = entry.split('|', 1)
                 if cutoff <= day <= today.isoformat():
@@ -116,11 +134,20 @@ def activity(root, cache_path=None, today=None):
         except OSError:
             pass
     daily = []
-    for offset in range(6, -1, -1):
+    for offset in range(29, -1, -1):
         day = today - datetime.timedelta(days=offset)
-        daily.append({'day': day.strftime('%a'), 'tokens': days.get(day.isoformat(), 0)})
-    return {'today': days.get(today.isoformat(), 0), 'week': sum(d['tokens'] for d in daily),
-            'month': sum(days.values()), 'daily': daily, 'sessions': len(sessions),
+        daily.append({'day': day.strftime('%a'), 'date': day.isoformat(), 'tokens': days.get(day.isoformat(), 0)})
+    breakdown_week = {}
+    breakdown_month = {}
+    for day, parts in breakdown_days.items():
+        for field, value in parts.items():
+            breakdown_month[field] = breakdown_month.get(field, 0) + value
+            if day >= week_start:
+                breakdown_week[field] = breakdown_week.get(field, 0) + value
+    return {'breakdown_week': breakdown_week, 'breakdown_month': breakdown_month,
+            'previous_week': sum(d['tokens'] for d in daily[-14:-7]), 'daily30': daily,
+            'today': days.get(today.isoformat(), 0), 'week': sum(d['tokens'] for d in daily[-7:]),
+            'month': sum(days.values()), 'daily': daily[-7:], 'sessions': len(sessions),
             'models': [{'name': name, 'tokens': count} for name, count in sorted(models.items(), key=lambda v: v[1], reverse=True)[:4]]}
 
 
@@ -130,7 +157,7 @@ def emit(key, value):
 
 def main():
     root = Path(os.environ.get('CODEX_HOME', str(Path.home()/'.codex'))) / 'sessions'
-    cache = Path(os.environ.get('XDG_CACHE_HOME', str(Path.home()/'.cache'))) / 'codexUsage/activity-v1.json'
+    cache = Path(os.environ.get('XDG_CACHE_HOME', str(Path.home()/'.cache'))) / 'codexUsage/activity-v2.json'
     emit('STATS', json.dumps(activity(root, cache), separators=(',', ':')))
     snapshot = snapshots(root)
     emit('GROUPS', '')
