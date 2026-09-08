@@ -1,0 +1,19 @@
+{
+  "id": "codexUsage",
+  "name": "Codex Usage",
+  "description": "Latest locally recorded Codex limits and reset countdowns",
+  "version": "1.0.0",
+  "author": "mir4zul",
+  "icon": "terminal",
+  "type": "widget",
+  "capabilities": [
+    "dankbar-widget"
+  ],
+  "component": "./CodexUsageWidget.qml",
+  "requires": [
+    "python3"
+  ],
+  "permissions": [
+    "settings_read"
+  ]
+}
