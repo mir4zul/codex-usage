@@ -27,7 +27,7 @@ Tested on Hyprland. The widget uses DMS components; other compositors have not b
 ## Install
 
 ```sh
-git clone https://github.com/mir4zul/dms-codex-usage.git ~/.config/DankMaterialShell/plugins/codexUsage
+git clone https://github.com/mir4zul/codex-usage.git ~/.config/DankMaterialShell/plugins/codexUsage
 ```
 
 The directory name must be `codexUsage`. In DMS Settings → Plugins, enable **Codex Usage**, then add it to your DankBar widgets. Restart DMS if it does not discover the new plugin.
