@@ -11,6 +11,12 @@ import "translations.js" as Tr
 PluginComponent {
     id: root
 
+    IpcHandler {
+        enabled: root.axis !== null
+        target: root.isVertical ? "codex-layout-side" : "codex-layout-wide"
+        function open(): string { root.triggerPopout(); return "opened"; }
+        function toggle(): string { root.savePreference("detailsExpanded", !root.detailsExpanded); return "toggled"; }
+    }
     // i18n
     property string lang: Qt.locale().name.split(/[_-]/)[0]
     function tr(key) {
@@ -142,8 +148,8 @@ PluginComponent {
         return maxUsed;
     }
 
-    popoutWidth: 420
-    popoutHeight: detailsExpanded ? 820 : 500
+    popoutWidth: isVertical ? 420 : 680
+    popoutHeight: isVertical ? (detailsExpanded ? 820 : 500) : (detailsExpanded ? 650 : 430)
 
     // --- Helpers ---
 
@@ -438,6 +444,30 @@ PluginComponent {
 
     popoutContent: Component {
         PopoutComponent {
+            id: dashboard
+
+            function centerTopPopout() {
+                if (root.axis?.edge !== "top" || !parentPopout?.screen) return;
+                const centeredTrigger = (parentPopout.screen.width - parentPopout.triggerWidth) / 2;
+                if (parentPopout.triggerX !== centeredTrigger)
+                    parentPopout.triggerX = centeredTrigger;
+            }
+
+            onParentPopoutChanged: {
+                if (!parentPopout) return;
+                // A fixed Wayland surface and immediate geometry updates avoid
+                // transient buffer scaling while expanding/collapsing details.
+                parentPopout.fullHeightSurface = true;
+                parentPopout.animationDuration = 0;
+                centerTopPopout();
+            }
+            Connections {
+                target: dashboard.parentPopout
+                function onTriggerXChanged() { dashboard.centerTopPopout(); }
+                function onTriggerWidthChanged() { dashboard.centerTopPopout(); }
+                function onScreenChanged() { dashboard.centerTopPopout(); }
+                function onShouldBeVisibleChanged() { dashboard.centerTopPopout(); }
+            }
             headerText: "Codex Usage"
             detailsText: (root.plan || "Codex") + " · Local usage insights"
             showCloseButton: true
@@ -501,34 +531,48 @@ PluginComponent {
                             property bool expired: bucket.RESET ? new Date(bucket.RESET).getTime() <= root.countdownNow : false
                             property color accent: used >= 80 ? Theme.error : (used >= 50 ? Theme.warning : (modelData === "primary" ? Theme.primary : Theme.secondary))
                             width: (parent.width - 12) / 2
-                            height: 208; radius: 20
+                            height: root.isVertical ? 208 : 128; radius: 18
                             color: Theme.surfaceContainerHigh
                             border.width: 1
-                            border.color: Theme.withAlpha(accent, 0.16)
+                            border.color: Theme.withAlpha(accent, 0.22)
+                            UsageRing {
+                                id: quotaRing
+                                anchors.left: root.isVertical ? undefined : parent.left
+                                anchors.leftMargin: 16
+                                anchors.horizontalCenter: root.isVertical ? parent.horizontalCenter : undefined
+                                anchors.top: root.isVertical ? parent.top : undefined
+                                anchors.topMargin: 14
+                                anchors.verticalCenter: root.isVertical ? undefined : parent.verticalCenter
+                                width: 80; height: 80
+                                percent: quotaCard.used
+                                accent: quotaCard.accent
+                                opacity: quotaCard.recorded ? 1 : 0.35
+                            }
                             Column {
-                                anchors.fill: parent; anchors.margins: 14
-                                spacing: 9
+                                anchors.left: root.isVertical ? parent.left : quotaRing.right
+                                anchors.right: parent.right
+                                anchors.leftMargin: root.isVertical ? 14 : 16
+                                anchors.rightMargin: 14
+                                anchors.top: root.isVertical ? quotaRing.bottom : undefined
+                                anchors.topMargin: 12
+                                anchors.verticalCenter: root.isVertical ? undefined : parent.verticalCenter
+                                spacing: 8
                                 StyledText {
-                                    anchors.horizontalCenter: parent.horizontalCenter
+                                    width: parent.width
+                                    horizontalAlignment: root.isVertical ? Text.AlignHCenter : Text.AlignLeft
                                     text: quotaCard.modelData === "primary" ? "5-hour limit" : "Weekly limit"
-                                    font.pixelSize: 14; font.weight: Font.DemiBold
+                                    font.pixelSize: 15; font.weight: Font.DemiBold
                                     color: Theme.surfaceText
                                 }
-                                UsageRing {
-                                    anchors.horizontalCenter: parent.horizontalCenter
-                                    width: 88; height: 88
-                                    percent: quotaCard.used
-                                    accent: quotaCard.accent
-                                    opacity: quotaCard.recorded ? 1 : 0.35
-                                }
                                 StyledText {
-                                    anchors.horizontalCenter: parent.horizontalCenter
+                                    width: parent.width
+                                    horizontalAlignment: root.isVertical ? Text.AlignHCenter : Text.AlignLeft
                                     text: quotaCard.recorded ? (100-Math.round(quotaCard.used)) + "% remaining" : "Not recorded"
                                     font.pixelSize: 13; color: quotaCard.accent
                                 }
                                 StyledText {
                                     width: parent.width
-                                    horizontalAlignment: Text.AlignHCenter
+                                    horizontalAlignment: root.isVertical ? Text.AlignHCenter : Text.AlignLeft
                                     text: quotaCard.expired ? "Waiting for fresh data" : (quotaCard.bucket.RESET ? "Reset in " + root.countdown(quotaCard.bucket.RESET) : "Reset unavailable")
                                     font.pixelSize: 11
                                     color: quotaCard.expired ? Theme.warning : Theme.surfaceVariantText
@@ -540,11 +584,11 @@ PluginComponent {
                 }
 
                 Rectangle {
-                    width: parent.width; height: 94; radius: 18
+                    width: parent.width; height: 82; radius: 18
                     color: Theme.surfaceContainerHigh
                     Column {
-                        anchors.fill: parent; anchors.margins: 14; spacing: 10
-                        StyledText { text: "Token activity"; font.pixelSize: 13; color: Theme.surfaceVariantText }
+                        anchors.fill: parent; anchors.margins: 12; spacing: 6
+                        StyledText { text: "Token activity"; font.pixelSize: 11; color: Theme.surfaceVariantText }
                         Row {
                             width: parent.width
                             Repeater {
@@ -552,7 +596,7 @@ PluginComponent {
                                 delegate: Column {
                                     required property var modelData
                                     width: parent.width / 3; spacing: 3
-                                    StyledText { text: root.compact(modelData.value); color: Theme.surfaceText; font.pixelSize: 23; font.weight: Font.DemiBold }
+                                    StyledText { text: root.compact(modelData.value); color: Theme.surfaceText; font.pixelSize: 21; font.weight: Font.DemiBold }
                                     StyledText { text: modelData.label; color: Theme.surfaceVariantText; font.pixelSize: 12 }
                                 }
                             }
@@ -574,104 +618,108 @@ PluginComponent {
                     }
                 }
 
-                Rectangle {
+                Flow {
+                    width: parent.width
+                    spacing: 12
                     visible: root.detailsExpanded
-                    width: parent.width; height: 180; radius: 18
-                    color: Theme.surfaceContainerHigh
-                    Column {
-                        anchors.fill: parent; anchors.margins: 14; spacing: 8
-                        Row {
-                            width: parent.width
-                            StyledText {
-                                text: "Activity"; width: parent.width - 112
-                                anchors.verticalCenter: parent.verticalCenter
-                                font.pixelSize: 14; font.weight: Font.DemiBold; color: Theme.surfaceText
+
+                    Rectangle {
+                        width: root.isVertical ? parent.width : (parent.width - parent.spacing) / 2; height: 210; radius: 18
+                        color: Theme.surfaceContainerHigh
+                        Column {
+                            anchors.fill: parent; anchors.margins: 14; spacing: 8
+                            Row {
+                                width: parent.width
+                                StyledText {
+                                    text: "Activity"; width: parent.width - 112
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    font.pixelSize: 14; font.weight: Font.DemiBold; color: Theme.surfaceText
+                                }
+                                ActionChip { label: "7d"; selected: root.chartDays === 7; onClicked: root.savePreference("chartDays", 7) }
+                                ActionChip { label: "30d"; selected: root.chartDays === 30; onClicked: root.savePreference("chartDays", 30) }
                             }
-                            ActionChip { label: "7d"; selected: root.chartDays === 7; onClicked: root.savePreference("chartDays", 7) }
-                            ActionChip { label: "30d"; selected: root.chartDays === 30; onClicked: root.savePreference("chartDays", 30) }
-                        }
-                        StyledText {
-                            text: root.hoveredDay || (root.chartDays === 7 ? root.weekTrend : "Daily tokens · last 30 days")
-                            width: parent.width; elide: Text.ElideRight
-                            font.pixelSize: 12; color: root.hoveredDay ? Theme.primary : Theme.surfaceVariantText
-                        }
-                        Row {
-                            width: parent.width; spacing: root.chartDays === 7 ? 8 : 3
-                            Repeater {
-                                model: root.chartData
-                                delegate: Column {
-                                    required property var modelData
-                                    required property int index
-                                    width: (parent.width - parent.spacing * (root.chartData.length - 1)) / Math.max(1, root.chartData.length)
-                                    spacing: 6
-                                    Item {
-                                        width: parent.width; height: 64
-                                        Rectangle {
-                                            anchors.bottom: parent.bottom
-                                            width: parent.width
-                                            height: modelData.tokens > 0 ? Math.max(3, 64 * modelData.tokens / root.maxDaily) : 2
-                                            radius: Math.min(4, width / 2)
-                                            color: dayHover.containsMouse || index === root.chartData.length - 1 ? Theme.primary : Theme.withAlpha(Theme.primary, 0.36)
-                                            Behavior on height { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
+                            StyledText {
+                                text: root.hoveredDay || (root.chartDays === 7 ? root.weekTrend : "Daily tokens · last 30 days")
+                                width: parent.width; elide: Text.ElideRight
+                                font.pixelSize: 12; color: root.hoveredDay ? Theme.primary : Theme.surfaceVariantText
+                            }
+                            Row {
+                                width: parent.width; spacing: root.chartDays === 7 ? 8 : 3
+                                Repeater {
+                                    model: root.chartData
+                                    delegate: Column {
+                                        required property var modelData
+                                        required property int index
+                                        width: (parent.width - parent.spacing * (root.chartData.length - 1)) / Math.max(1, root.chartData.length)
+                                        spacing: 6
+                                        Item {
+                                            width: parent.width; height: 94
+                                            Rectangle {
+                                                anchors.bottom: parent.bottom
+                                                width: parent.width
+                                                height: modelData.tokens > 0 ? Math.max(3, 94 * modelData.tokens / root.maxDaily) : 2
+                                                radius: Math.min(4, width / 2)
+                                                color: dayHover.containsMouse || index === root.chartData.length - 1 ? Theme.primary : Theme.withAlpha(Theme.primary, 0.36)
+                                                Behavior on height { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
+                                            }
+                                            MouseArea {
+                                                id: dayHover
+                                                anchors.fill: parent; hoverEnabled: true
+                                                onEntered: root.hoveredDay = modelData.date + " · " + Number(modelData.tokens).toLocaleString(Qt.locale(), 'f', 0) + " tokens"
+                                                onExited: root.hoveredDay = ""
+                                            }
                                         }
-                                        MouseArea {
-                                            id: dayHover
-                                            anchors.fill: parent; hoverEnabled: true
-                                            onEntered: root.hoveredDay = modelData.date + " · " + Number(modelData.tokens).toLocaleString(Qt.locale(), 'f', 0) + " tokens"
-                                            onExited: root.hoveredDay = ""
+                                        StyledText {
+                                            anchors.horizontalCenter: parent.horizontalCenter
+                                            text: root.chartDays === 7 ? modelData.day : ((index === 0 || index === 14 || index === 29) ? modelData.date.slice(8) : "")
+                                            font.pixelSize: 10; color: Theme.surfaceVariantText
                                         }
-                                    }
-                                    StyledText {
-                                        anchors.horizontalCenter: parent.horizontalCenter
-                                        text: root.chartDays === 7 ? modelData.day : ((index === 0 || index === 14 || index === 29) ? modelData.date.slice(8) : "")
-                                        font.pixelSize: 10; color: Theme.surfaceVariantText
                                     }
                                 }
                             }
                         }
                     }
-                }
 
-                Rectangle {
-                    visible: root.detailsExpanded
-                    width: parent.width; height: modelColumn.implicitHeight + 28; radius: 18
-                    color: Theme.surfaceContainerHigh
-                    Column {
-                        id: modelColumn
-                        anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
-                        anchors.margins: 14; spacing: 10
-                        StyledText { text: "Top models · 7 days"; font.pixelSize: 14; font.weight: Font.DemiBold; color: Theme.surfaceText }
-                        StyledText { visible: !(root.stats.models || []).length; text: "No local token activity yet"; font.pixelSize: 12; color: Theme.surfaceVariantText }
-                        Repeater {
-                            model: root.stats.models || []
-                            delegate: Column {
-                                required property var modelData
-                                width: modelColumn.width; spacing: 5
-                                Row {
-                                    width: parent.width
-                                    StyledText { text: modelData.name; width: parent.width - 106; elide: Text.ElideRight; font.pixelSize: 12; color: Theme.surfaceText }
-                                    StyledText { text: root.compact(modelData.tokens) + " · " + Math.round(100 * modelData.tokens / Math.max(1, root.stats.week || 0)) + "%"; width: 106; horizontalAlignment: Text.AlignRight; font.pixelSize: 12; color: Theme.surfaceVariantText }
-                                }
-                                Rectangle {
-                                    width: parent.width; height: 4; radius: 2; color: Theme.surfaceVariant
+                    Rectangle {
+                        width: root.isVertical ? parent.width : (parent.width - parent.spacing) / 2; height: Math.max(210, modelColumn.implicitHeight + 28); radius: 18
+                        color: Theme.surfaceContainerHigh
+                        Column {
+                            id: modelColumn
+                            anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
+                            anchors.margins: 14; spacing: 10
+                            StyledText { text: "Top models · 7 days"; font.pixelSize: 14; font.weight: Font.DemiBold; color: Theme.surfaceText }
+                            StyledText { visible: !(root.stats.models || []).length; text: "No local token activity yet"; font.pixelSize: 12; color: Theme.surfaceVariantText }
+                            Repeater {
+                                model: root.stats.models || []
+                                delegate: Column {
+                                    required property var modelData
+                                    width: modelColumn.width; spacing: 5
+                                    Row {
+                                        width: parent.width
+                                        StyledText { text: modelData.name; width: parent.width - 106; elide: Text.ElideRight; font.pixelSize: 12; color: Theme.surfaceText }
+                                        StyledText { text: root.compact(modelData.tokens) + " · " + Math.round(100 * modelData.tokens / Math.max(1, root.stats.week || 0)) + "%"; width: 106; horizontalAlignment: Text.AlignRight; font.pixelSize: 12; color: Theme.surfaceVariantText }
+                                    }
                                     Rectangle {
-                                        width: parent.width * Math.min(1, modelData.tokens / Math.max(1, root.stats.week || 0))
-                                        height: 4; radius: 2; color: Theme.secondary
-                                        Behavior on width { NumberAnimation { duration: 220 } }
+                                        width: parent.width; height: 4; radius: 2; color: Theme.surfaceVariant
+                                        Rectangle {
+                                            width: parent.width * Math.min(1, modelData.tokens / Math.max(1, root.stats.week || 0))
+                                            height: 4; radius: 2; color: Theme.secondary
+                                            Behavior on width { NumberAnimation { duration: 220 } }
+                                        }
                                     }
                                 }
                             }
-                        }
-                        StyledText {
-                            width: parent.width
-                            text: root.breakdownText
-                            font.pixelSize: 11; color: Theme.surfaceVariantText; wrapMode: Text.WordWrap
+                            StyledText {
+                                width: parent.width
+                                text: root.breakdownText
+                                font.pixelSize: 11; color: Theme.surfaceVariantText; wrapMode: Text.WordWrap
+                            }
                         }
                     }
                 }
                 StyledText {
                     width: parent.width
-                    text: "Local estimates · " + (root.stats.sessions || 0) + " sessions / 7 days\nRefresh reads local logs; it does not fetch live quota."
+                    text: "Local estimates · " + (root.stats.sessions || 0) + " sessions / 7 days · Quota from last local snapshot"
                     font.pixelSize: 11; color: Theme.surfaceVariantText
                     horizontalAlignment: Text.AlignHCenter; wrapMode: Text.WordWrap
                 }

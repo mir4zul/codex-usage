@@ -10,6 +10,7 @@ A compact DankBar widget with two progress rings: **five-hour usage on top, week
 
 - Two stacked progress rings for vertical bars; labeled percentages for horizontal bars.
 - Side-by-side five-hour and weekly quota cards with explicit **used** labels and remaining percentages.
+- Adaptive dashboard: 420px wide for side bars with stacked detail panels; 680px wide for top/bottom bars with horizontal quota cards and side-by-side details.
 - Theme-aware colors, subtle card borders, and animated rings and charts.
 - Reset countdowns, relative snapshot age, and a stale-data indicator.
 - Local token totals for today, the last 7 days, and the last 30 days.
