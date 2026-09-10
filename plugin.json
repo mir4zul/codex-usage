@@ -2,7 +2,7 @@
   "id": "codexUsage",
   "name": "Codex Usage",
   "description": "Codex quota rings, local token activity and model usage",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "author": "mir4zul",
   "icon": "terminal",
   "type": "widget",
@@ -16,5 +16,6 @@
   "permissions": [
     "settings_read",
     "settings_write"
-  ]
+  ],
+  "settings": "./CodexUsageSettings.qml"
 }

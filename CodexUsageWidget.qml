@@ -24,7 +24,7 @@ PluginComponent {
     }
 
     // Settings
-    property int refreshInterval: 30000
+    property int refreshInterval: [15, 30, 60, 300].indexOf(Number(pluginData.refreshSeconds)) !== -1 ? Number(pluginData.refreshSeconds) * 1000 : 30000
     property bool showIcon: pluginData.showIcon !== false       // default on
 
     // Account/session state
@@ -38,7 +38,7 @@ PluginComponent {
     property real maxDaily: Math.max.apply(null, [1].concat(chartData.map(function(d) { return d.tokens; })))
     property bool detailsExpanded: pluginData.detailsExpanded !== false
     property bool alertsEnabled: pluginData.alertsEnabled === true
-    property int chartDays: pluginData.chartDays === 30 ? 30 : 7
+    property int chartDays: Number(pluginData.chartDays) === 30 ? 30 : 7
     property var chartData: chartDays === 30 ? (stats.daily30 || []) : (stats.daily || [])
     property string hoveredDay: ""
     onChartDaysChanged: hoveredDay = ""
@@ -294,6 +294,13 @@ PluginComponent {
     horizontalBarPill: Component {
         Row {
             spacing: Theme.spacingS
+            DankIcon {
+                name: "terminal"
+                size: 18
+                color: Theme.primary
+                visible: root.showIcon
+                anchors.verticalCenter: parent.verticalCenter
+            }
             StyledText {
                 text: "5h " + root.limitText("primary")
                 font.pixelSize: Theme.fontSizeSmall
@@ -311,19 +318,12 @@ PluginComponent {
         Column {
             spacing: Theme.spacingXS || 4
 
-            Image {
-                source: root.logoSource
-                sourceSize.width: 16
-                sourceSize.height: 16
-                width: 16
-                height: 16
+            DankIcon {
+                name: "terminal"
+                size: 18
+                color: Theme.primary
                 anchors.horizontalCenter: parent.horizontalCenter
                 visible: root.showIcon
-                layer.enabled: true
-                layer.effect: MultiEffect {
-                    colorization: 1.0
-                    colorizationColor: Theme.primary
-                }
             }
 
             Repeater {
