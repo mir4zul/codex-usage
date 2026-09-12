@@ -446,27 +446,13 @@ PluginComponent {
         PopoutComponent {
             id: dashboard
 
-            function centerTopPopout() {
-                if (root.axis?.edge !== "top" || !parentPopout?.screen) return;
-                const centeredTrigger = (parentPopout.screen.width - parentPopout.triggerWidth) / 2;
-                if (parentPopout.triggerX !== centeredTrigger)
-                    parentPopout.triggerX = centeredTrigger;
-            }
-
             onParentPopoutChanged: {
                 if (!parentPopout) return;
+                // Let DMS anchor the popout to the widget on every bar edge.
                 // A fixed Wayland surface and immediate geometry updates avoid
                 // transient buffer scaling while expanding/collapsing details.
                 parentPopout.fullHeightSurface = true;
                 parentPopout.animationDuration = 0;
-                centerTopPopout();
-            }
-            Connections {
-                target: dashboard.parentPopout
-                function onTriggerXChanged() { dashboard.centerTopPopout(); }
-                function onTriggerWidthChanged() { dashboard.centerTopPopout(); }
-                function onScreenChanged() { dashboard.centerTopPopout(); }
-                function onShouldBeVisibleChanged() { dashboard.centerTopPopout(); }
             }
             headerText: "Codex Usage"
             detailsText: (root.plan || "Codex") + " · Local usage insights"
