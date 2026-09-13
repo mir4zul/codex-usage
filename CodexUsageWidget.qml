@@ -149,7 +149,7 @@ PluginComponent {
     }
 
     popoutWidth: isVertical ? 420 : 680
-    popoutHeight: isVertical ? (detailsExpanded ? 820 : 500) : (detailsExpanded ? 650 : 430)
+    popoutHeight: isVertical ? (detailsExpanded ? 840 : 520) : (detailsExpanded ? 670 : 450)
 
     // --- Helpers ---
 
@@ -406,13 +406,85 @@ PluginComponent {
                 }
             }
         }
-        StyledText {
+        Column {
             anchors.centerIn: parent
-            text: Math.round(parent.percent) + "%\nused"
-            horizontalAlignment: Text.AlignHCenter
-            color: Theme.surfaceText
-            font.pixelSize: 17
-            font.weight: Font.DemiBold
+            spacing: 1
+            StyledText {
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: Math.round(parent.parent.percent) + "%"
+                color: Theme.surfaceText
+                font.pixelSize: 22
+                font.weight: Font.Bold
+            }
+            StyledText {
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: "used"
+                color: Theme.surfaceVariantText
+                font.pixelSize: 10
+            }
+        }
+    }
+
+    component BackgroundGlow: Canvas {
+        property color glowColor: Theme.primary
+        width: 130
+        height: width
+        opacity: 0.22
+        onGlowColorChanged: requestPaint()
+        onWidthChanged: requestPaint()
+        onHeightChanged: requestPaint()
+        onPaint: {
+            var ctx = getContext("2d");
+            ctx.reset();
+            var radius = width / 2;
+            var glow = ctx.createRadialGradient(radius, height / 2, 0, radius, height / 2, radius);
+            glow.addColorStop(0, glowColor.toString());
+            glow.addColorStop(1, "transparent");
+            ctx.fillStyle = glow;
+            ctx.fillRect(0, 0, width, height);
+        }
+    }
+
+    component DashboardCard: Rectangle {
+        id: cardSurface
+        property color tint: Theme.primary
+        radius: 18
+        border.width: 1
+        border.color: Theme.withAlpha(tint, 0.16)
+        gradient: Gradient {
+            GradientStop { position: 0; color: Qt.tint(Theme.surfaceContainer, Theme.withAlpha(tint, 0.09)) }
+            GradientStop { position: 1; color: Qt.tint(Theme.surfaceContainer, Theme.withAlpha(tint, 0.025)) }
+        }
+        Canvas {
+            anchors.fill: parent
+            property color glowColor: cardSurface.tint
+            opacity: 0.20
+            onGlowColorChanged: requestPaint()
+            onWidthChanged: requestPaint()
+            onHeightChanged: requestPaint()
+            onPaint: {
+                var ctx = getContext("2d");
+                ctx.reset();
+                var r = Math.min(cardSurface.radius, width / 2, height / 2);
+                ctx.beginPath();
+                ctx.moveTo(r, 0);
+                ctx.lineTo(width - r, 0);
+                ctx.quadraticCurveTo(width, 0, width, r);
+                ctx.lineTo(width, height - r);
+                ctx.quadraticCurveTo(width, height, width - r, height);
+                ctx.lineTo(r, height);
+                ctx.quadraticCurveTo(0, height, 0, height - r);
+                ctx.lineTo(0, r);
+                ctx.quadraticCurveTo(0, 0, r, 0);
+                ctx.closePath();
+                ctx.clip();
+                var reach = Math.min(width * 0.65, 150);
+                var glow = ctx.createRadialGradient(width, height * 0.45, 0, width, height * 0.45, reach);
+                glow.addColorStop(0, glowColor.toString());
+                glow.addColorStop(1, "transparent");
+                ctx.fillStyle = glow;
+                ctx.fillRect(0, 0, width, height);
+            }
         }
     }
 
@@ -424,6 +496,9 @@ PluginComponent {
         width: chipText.implicitWidth + 22
         height: 30
         radius: 15
+        border.width: 1
+        border.color: Theme.withAlpha(Theme.primary, selected ? 0.24 : 0.09)
+        Behavior on color { ColorAnimation { duration: 140 } }
         color: selected ? Theme.withAlpha(Theme.primary, 0.16) : (chipMouse.containsMouse ? Theme.surfaceContainerHigh : "transparent")
         StyledText {
             id: chipText
@@ -446,6 +521,43 @@ PluginComponent {
         PopoutComponent {
             id: dashboard
 
+            // Blend with the active surface so light and dark themes stay readable.
+            Rectangle {
+                parent: dashboard.parent
+                anchors.fill: parent
+                anchors.margins: -Theme.spacingS
+                z: -1
+                radius: 16
+                border.width: 1
+                border.color: Theme.withAlpha(Theme.primary, 0.22)
+                gradient: Gradient {
+                    GradientStop { position: 0.0; color: Qt.tint(Theme.surfaceContainerLow, Theme.withAlpha(Theme.primary, 0.22)) }
+                    GradientStop { position: 0.48; color: Qt.tint(Theme.surfaceContainerLow, Theme.withAlpha(Theme.secondary, 0.12)) }
+                    GradientStop { position: 1.0; color: Theme.surfaceContainerLow }
+                }
+
+                BackgroundGlow {
+                    x: parent.width * 0.08
+                    y: 8
+                    glowColor: Theme.primary
+                }
+                BackgroundGlow {
+                    anchors.right: parent.right
+                    anchors.rightMargin: 8
+                    y: parent.height * 0.34
+                    width: 110
+                    glowColor: Theme.secondary
+                }
+                BackgroundGlow {
+                    x: parent.width * 0.25
+                    anchors.bottom: parent.bottom
+                    anchors.bottomMargin: 8
+                    width: 100
+                    glowColor: Theme.tertiary
+                    opacity: 0.18
+                }
+            }
+
             function centerTopPopout() {
                 if (root.axis?.edge !== "top" || !parentPopout?.screen) return;
                 const centeredTrigger = (parentPopout.screen.width - parentPopout.triggerWidth) / 2;
@@ -455,10 +567,8 @@ PluginComponent {
 
             onParentPopoutChanged: {
                 if (!parentPopout) return;
-                // A fixed Wayland surface and immediate geometry updates avoid
-                // transient buffer scaling while expanding/collapsing details.
+                // Keep the surface stable while using the shell's default popup animation.
                 parentPopout.fullHeightSurface = true;
-                parentPopout.animationDuration = 0;
                 centerTopPopout();
             }
             Connections {
@@ -468,13 +578,36 @@ PluginComponent {
                 function onScreenChanged() { dashboard.centerTopPopout(); }
                 function onShouldBeVisibleChanged() { dashboard.centerTopPopout(); }
             }
-            headerText: "Codex Usage"
-            detailsText: (root.plan || "Codex") + " · Local usage insights"
-            showCloseButton: true
-            Column {
-                width: parent.width - 16
-                anchors.horizontalCenter: parent.horizontalCenter
-                spacing: 12
+            headerText: ""
+            detailsText: ""
+            showCloseButton: false
+            Flickable {
+                width: parent.width
+                height: Math.min(contentHeight, Math.max(240, (dashboard.parentPopout?.screen?.height || 1000) - 160))
+                contentHeight: dashboardBody.implicitHeight
+                clip: true
+                boundsBehavior: Flickable.StopAtBounds
+                flickableDirection: Flickable.VerticalFlick
+                Column {
+                    id: dashboardBody
+                    width: parent.width - 16
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    spacing: 12
+
+                    Row {
+                        width: parent.width
+                        spacing: 8
+                        DankIcon { name: "terminal"; size: 24; color: Theme.primary; anchors.verticalCenter: parent.verticalCenter }
+                        StyledText { id: dashboardTitle; text: "Codex Usage"; font.pixelSize: 20; font.weight: Font.Bold; color: Theme.surfaceText; anchors.verticalCenter: parent.verticalCenter }
+                        Rectangle {
+                            width: planText.implicitWidth + 16; height: 24; radius: 12
+                            anchors.verticalCenter: parent.verticalCenter
+                            color: Theme.withAlpha(Theme.primary, 0.12)
+                            StyledText { id: planText; anchors.centerIn: parent; text: root.plan || "Codex"; font.pixelSize: 11; color: Theme.primary }
+                        }
+                        Item { width: Math.max(0, parent.width - 24 - dashboardTitle.implicitWidth - planText.implicitWidth - 16 - closeChip.width - 32); height: 1 }
+                        ActionChip { id: closeChip; label: "×"; onClicked: { if (dashboard.closePopout) dashboard.closePopout(); } }
+                    }
 
                 Row {
                     width: parent.width
@@ -504,10 +637,9 @@ PluginComponent {
                     }
                 }
 
-                Rectangle {
+                DashboardCard {
                     visible: !root.loggedIn
                     width: parent.width; height: 72; radius: 16
-                    color: Theme.surfaceContainerHigh
                     StyledText {
                         anchors.fill: parent; anchors.margins: 16
                         text: root.isLoading ? "Reading local usage…" : "No quota snapshot yet. Use Codex to record your limits."
@@ -522,7 +654,7 @@ PluginComponent {
                     visible: root.loggedIn
                     Repeater {
                         model: ["primary", "secondary"]
-                        delegate: Rectangle {
+                        delegate: DashboardCard {
                             id: quotaCard
                             required property string modelData
                             property var bucket: root.buckets[modelData] || ({})
@@ -532,7 +664,7 @@ PluginComponent {
                             property color accent: used >= 80 ? Theme.error : (used >= 50 ? Theme.warning : (modelData === "primary" ? Theme.primary : Theme.secondary))
                             width: (parent.width - 12) / 2
                             height: root.isVertical ? 208 : 128; radius: 18
-                            color: Theme.surfaceContainerHigh
+                            tint: accent
                             border.width: 1
                             border.color: Theme.withAlpha(accent, 0.22)
                             UsageRing {
@@ -583,49 +715,34 @@ PluginComponent {
                     }
                 }
 
-                Rectangle {
-                    width: parent.width; height: 82; radius: 18
-                    color: Theme.surfaceContainerHigh
-                    Column {
-                        anchors.fill: parent; anchors.margins: 12; spacing: 6
-                        StyledText { text: "Token activity"; font.pixelSize: 11; color: Theme.surfaceVariantText }
-                        Row {
-                            width: parent.width
-                            Repeater {
-                                model: [{label:"Today",value:root.stats.today || 0},{label:"7 days",value:root.stats.week || 0},{label:"30 days",value:root.stats.month || 0}]
-                                delegate: Column {
-                                    required property var modelData
-                                    width: parent.width / 3; spacing: 3
-                                    StyledText { text: root.compact(modelData.value); color: Theme.surfaceText; font.pixelSize: 21; font.weight: Font.DemiBold }
-                                    StyledText { text: modelData.label; color: Theme.surfaceVariantText; font.pixelSize: 12 }
-                                }
+                Row {
+                    width: parent.width
+                    spacing: 10
+                    Repeater {
+                        model: [{label:"Today",value:root.stats.today || 0},{label:"7 days",value:root.stats.week || 0},{label:"30 days",value:root.stats.month || 0}]
+                        delegate: DashboardCard {
+                            required property var modelData
+                            required property int index
+                            width: (parent.width - 20) / 3
+                            height: 94
+                            tint: index === 0 ? Theme.primary : (index === 1 ? Theme.secondary : Theme.tertiary)
+                            Column {
+                                anchors.fill: parent; anchors.margins: 12; spacing: 5
+                                StyledText { text: modelData.label; color: Theme.surfaceVariantText; font.pixelSize: 11 }
+                                StyledText { width: parent.width; text: root.compact(modelData.value); elide: Text.ElideRight; color: Theme.surfaceText; font.pixelSize: 22; font.weight: Font.Bold }
+                                StyledText { text: "tokens"; color: Theme.surfaceVariantText; font.pixelSize: 10 }
                             }
                         }
                     }
                 }
 
-                Row {
-                    width: parent.width; spacing: 6
-                    ActionChip {
-                        label: root.detailsExpanded ? "Less detail ↑" : "More detail ↓"
-                        selected: root.detailsExpanded
-                        onClicked: root.savePreference("detailsExpanded", !root.detailsExpanded)
-                    }
-                    ActionChip {
-                        label: root.alertsEnabled ? "Alerts on · 80/90%" : "Alerts off"
-                        selected: root.alertsEnabled
-                        onClicked: root.savePreference("alertsEnabled", !root.alertsEnabled)
-                    }
-                }
-
-                Flow {
+                Column {
                     width: parent.width
                     spacing: 12
                     visible: root.detailsExpanded
 
-                    Rectangle {
-                        width: root.isVertical ? parent.width : (parent.width - parent.spacing) / 2; height: 210; radius: 18
-                        color: Theme.surfaceContainerHigh
+                    DashboardCard {
+                        width: parent.width; height: 210; radius: 18
                         Column {
                             anchors.fill: parent; anchors.margins: 14; spacing: 8
                             Row {
@@ -680,9 +797,9 @@ PluginComponent {
                         }
                     }
 
-                    Rectangle {
-                        width: root.isVertical ? parent.width : (parent.width - parent.spacing) / 2; height: Math.max(210, modelColumn.implicitHeight + 28); radius: 18
-                        color: Theme.surfaceContainerHigh
+                    DashboardCard {
+                        width: parent.width; height: modelColumn.implicitHeight + 28; radius: 18
+                        tint: Theme.secondary
                         Column {
                             id: modelColumn
                             anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
@@ -691,21 +808,32 @@ PluginComponent {
                             StyledText { visible: !(root.stats.models || []).length; text: "No local token activity yet"; font.pixelSize: 12; color: Theme.surfaceVariantText }
                             Repeater {
                                 model: root.stats.models || []
-                                delegate: Column {
+                                delegate: Row {
                                     required property var modelData
-                                    width: modelColumn.width; spacing: 5
-                                    Row {
-                                        width: parent.width
-                                        StyledText { text: modelData.name; width: parent.width - 106; elide: Text.ElideRight; font.pixelSize: 12; color: Theme.surfaceText }
-                                        StyledText { text: root.compact(modelData.tokens) + " · " + Math.round(100 * modelData.tokens / Math.max(1, root.stats.week || 0)) + "%"; width: 106; horizontalAlignment: Text.AlignRight; font.pixelSize: 12; color: Theme.surfaceVariantText }
+                                    width: modelColumn.width
+                                    spacing: 10
+                                    StyledText {
+                                        text: modelData.name
+                                        width: (parent.width - 126) * 0.58
+                                        elide: Text.ElideRight
+                                        font.pixelSize: 12; color: Theme.surfaceText
+                                        anchors.verticalCenter: parent.verticalCenter
                                     }
                                     Rectangle {
-                                        width: parent.width; height: 4; radius: 2; color: Theme.surfaceVariant
+                                        width: (parent.width - 126) * 0.42
+                                        height: 4; radius: 2; color: Theme.surfaceVariant
+                                        anchors.verticalCenter: parent.verticalCenter
                                         Rectangle {
                                             width: parent.width * Math.min(1, modelData.tokens / Math.max(1, root.stats.week || 0))
                                             height: 4; radius: 2; color: Theme.secondary
                                             Behavior on width { NumberAnimation { duration: 220 } }
                                         }
+                                    }
+                                    StyledText {
+                                        text: root.compact(modelData.tokens) + " · " + Math.round(100 * modelData.tokens / Math.max(1, root.stats.week || 0)) + "%"
+                                        width: 106; horizontalAlignment: Text.AlignRight
+                                        font.pixelSize: 12; color: Theme.surfaceVariantText
+                                        anchors.verticalCenter: parent.verticalCenter
                                     }
                                 }
                             }
@@ -717,6 +845,20 @@ PluginComponent {
                         }
                     }
                 }
+                Row {
+                    width: parent.width; spacing: 6
+                    ActionChip {
+                        label: root.detailsExpanded ? "Less detail ↑" : "More detail ↓"
+                        selected: root.detailsExpanded
+                        onClicked: root.savePreference("detailsExpanded", !root.detailsExpanded)
+                    }
+                    ActionChip {
+                        label: root.alertsEnabled ? "Alerts on · 80/90%" : "Alerts off"
+                        selected: root.alertsEnabled
+                        onClicked: root.savePreference("alertsEnabled", !root.alertsEnabled)
+                    }
+                }
+
                 StyledText {
                     width: parent.width
                     text: "Local estimates · " + (root.stats.sessions || 0) + " sessions / 7 days · Quota from last local snapshot"
@@ -724,6 +866,7 @@ PluginComponent {
                     horizontalAlignment: Text.AlignHCenter; wrapMode: Text.WordWrap
                 }
                 Item { width: 1; height: 4 }
+                }
             }
         }
     }
